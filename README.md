@@ -34,34 +34,60 @@ A professional Windows desktop application for migrating and syncing photos from
 - **Pause/Resume/Cancel** — full control over sync operations
 - **Export reports** — JSON or text reports of your sync history
 
-## Quick Start
+## Installation
 
-### Prerequisites
-- Python 3.10 or later
-- SmugMug API key ([apply here](https://api.smugmug.com/api/developer/apply))
-- Google Cloud project with Photos Library API enabled ([setup guide](https://console.cloud.google.com/apis/library/photoslibrary.googleapis.com))
+### One-Click Install (Recommended)
 
-### Installation
+**Prerequisites:** [Python 3.10+](https://www.python.org/downloads/) (check "Add to PATH" during install)
+
+**Windows** — double-click `install.bat`, or:
+```
+install.bat
+```
+
+**Any platform** (Windows, macOS, Linux):
+```bash
+python install.py
+```
+
+That's it. The installer:
+1. Creates an isolated virtual environment (won't touch your system Python)
+2. Installs all dependencies automatically
+3. Creates a desktop shortcut and Start Menu entry (Windows) or .desktop file (Linux)
+4. Offers to launch the app when done
+
+To uninstall, run the generated `uninstall.bat` (Windows) or `uninstall.sh` (Linux/macOS).
+
+### Manual Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/your-repo/smugmug-google-photos-sync.git
 cd smugmug-google-photos-sync
-
-# Create virtual environment
 python -m venv venv
-venv\Scripts\activate  # Windows
+venv\Scripts\activate     # Windows
 # source venv/bin/activate  # macOS/Linux
-
-# Install dependencies
 pip install -e .
-```
-
-### Running the Application
-
-```bash
 python -m src.main
 ```
+
+### Standalone .exe (Windows — no Python required)
+
+Build a portable single-file executable:
+```bash
+pip install pyinstaller
+python installer/build_installer.py --exe-only
+```
+Output: `dist/SmugMugGooglePhotosSync.exe` — copy it anywhere and run.
+
+### Windows Setup Installer (Inno Setup)
+
+Build a traditional Next > Next > Install wizard:
+```bash
+pip install pyinstaller
+python installer/build_installer.py
+```
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) on the build machine.
+Output: `dist/installer/SmugMugGooglePhotosSync_Setup_1.0.0.exe`
 
 ### First-Time Setup
 
@@ -93,57 +119,42 @@ Settings are stored in:
 | Auto-sync | Disabled | Automatic background sync |
 | Sync interval | 24 hours | How often auto-sync runs |
 
-## Building the Installer
-
-### Create Standalone Executable
-
-```bash
-pip install pyinstaller
-python installer/build_installer.py
-```
-
-This produces a standalone executable in `dist/SmugMugGooglePhotosSync/`.
-
-### Windows Installer (Inno Setup)
-
-1. Install [Inno Setup 6](https://jrsoftware.org/isinfo.php)
-2. Run the build script — it auto-generates the `.iss` file and compiles it
-3. Find the installer in `dist/installer/`
-
 ## Project Structure
 
 ```
 smugmug-google-photos-sync/
+├── install.bat                      # One-click Windows installer
+├── install.py                       # Cross-platform installer (Win/Mac/Linux)
 ├── src/
 │   ├── api/
-│   │   ├── smugmug_client.py      # SmugMug API with OAuth 1.0a
-│   │   └── google_photos_client.py # Google Photos API with OAuth 2.0
+│   │   ├── smugmug_client.py        # SmugMug API with OAuth 1.0a
+│   │   └── google_photos_client.py  # Google Photos API with OAuth 2.0
 │   ├── core/
-│   │   ├── sync_engine.py          # Main sync orchestrator
-│   │   ├── sync_history.py         # SQLite sync history tracking
-│   │   └── scheduler.py            # Background auto-sync scheduler
+│   │   ├── sync_engine.py           # Main sync orchestrator
+│   │   ├── sync_history.py          # SQLite sync history tracking
+│   │   └── scheduler.py             # Background auto-sync scheduler
 │   ├── gui/
-│   │   ├── main_window.py          # Main application window
-│   │   ├── dashboard_tab.py        # Dashboard with stats and actions
-│   │   ├── browser_tab.py          # Photo browser with thumbnails
-│   │   ├── settings_tab.py         # Settings and credential management
-│   │   ├── history_tab.py          # Sync history and log viewer
-│   │   ├── splash_screen.py        # Startup splash screen
-│   │   ├── system_tray.py          # System tray icon and notifications
-│   │   └── theme.py                # Dark/light theme management
+│   │   ├── main_window.py           # Main application window
+│   │   ├── dashboard_tab.py         # Dashboard with stats and actions
+│   │   ├── browser_tab.py           # Photo browser with thumbnails
+│   │   ├── settings_tab.py          # Settings and credential management
+│   │   ├── history_tab.py           # Sync history and log viewer
+│   │   ├── splash_screen.py         # Startup splash screen
+│   │   ├── system_tray.py           # System tray icon and notifications
+│   │   └── theme.py                 # Dark/light theme management
 │   ├── utils/
-│   │   ├── config.py               # App configuration persistence
-│   │   ├── credentials.py          # Secure credential storage
-│   │   └── logging_config.py       # Logging setup with rotation
+│   │   ├── config.py                # App configuration persistence
+│   │   ├── credentials.py           # Secure credential storage
+│   │   └── logging_config.py        # Logging setup with rotation
 │   ├── assets/
-│   │   └── generate_icons.py       # Icon generation utility
-│   └── main.py                     # Application entry point
+│   │   └── generate_icons.py        # Icon generation utility
+│   └── main.py                      # Application entry point
 ├── tests/
 │   ├── test_config.py
 │   ├── test_sync_history.py
 │   └── test_credentials.py
 ├── installer/
-│   └── build_installer.py          # PyInstaller + Inno Setup build
+│   └── build_installer.py           # PyInstaller + Inno Setup build pipeline
 ├── docs/
 │   └── SETUP_GUIDE.md
 ├── pyproject.toml

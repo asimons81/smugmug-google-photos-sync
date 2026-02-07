@@ -1,137 +1,285 @@
-"""Build script for creating a Windows installer using PyInstaller + Inno Setup."""
+"""
+Build pipeline for creating distributable installers.
 
+Usage:
+    python installer/build_installer.py              # Build everything
+    python installer/build_installer.py --exe-only   # PyInstaller .exe only
+    python installer/build_installer.py --inno-only  # Inno Setup installer only (requires .exe first)
+    python installer/build_installer.py --onedir     # Directory-based build (faster startup)
+
+Requirements:
+    pip install pyinstaller
+    (optional) Inno Setup 6 installed on Windows for setup .exe
+"""
+
+import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 INSTALLER_DIR = PROJECT_ROOT / "installer"
+ICON_DIR = PROJECT_ROOT / "src" / "assets" / "icons"
+APP_NAME = "SmugMugGooglePhotosSync"
+APP_DISPLAY = "SmugMug Google Photos Sync"
+VERSION = "1.0.0"
 
 
-def build_executable():
-    """Build the standalone executable using PyInstaller."""
-    print("Building executable with PyInstaller...")
+def step(msg: str):
+    print(f"\n{'='*60}")
+    print(f"  {msg}")
+    print(f"{'='*60}\n")
+
+
+def ensure_icons() -> Path:
+    """Generate app icons if they don't exist yet."""
+    ico_path = ICON_DIR / "app.ico"
+    if ico_path.exists():
+        print(f"  Icons found at {ICON_DIR}")
+        return ico_path
+
+    step("Generating application icons")
+    ICON_DIR.mkdir(parents=True, exist_ok=True)
+
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from src.assets.generate_icons import generate_all_icons
+    generate_all_icons(ICON_DIR)
+    return ico_path
+
+
+HIDDEN_IMPORTS = [
+    "customtkinter",
+    "PIL",
+    "PIL._tkinter_finder",
+    "requests_oauthlib",
+    "oauthlib",
+    "google.auth",
+    "google.auth.transport",
+    "google.auth.transport.requests",
+    "google_auth_oauthlib",
+    "google_auth_oauthlib.flow",
+    "googleapiclient",
+    "googleapiclient.discovery",
+    "apscheduler",
+    "apscheduler.schedulers.background",
+    "apscheduler.triggers.interval",
+    "pystray",
+    "pystray._win32",
+    "keyring",
+    "keyring.backends",
+    "keyring.backends.Windows",
+    "darkdetect",
+    "tkcalendar",
+]
+
+
+def _pyinstaller_cmd(*, onefile: bool) -> list[str]:
+    """Build the PyInstaller command list."""
+    ico_path = ensure_icons()
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--name=SmugMugGooglePhotosSync",
+        f"--name={APP_NAME}",
         "--windowed",
-        "--onedir",
+        "--onefile" if onefile else "--onedir",
         "--clean",
         f"--distpath={DIST_DIR}",
         f"--workpath={BUILD_DIR}",
         f"--specpath={BUILD_DIR}",
-        "--add-data=src/assets;src/assets",
-        "--hidden-import=customtkinter",
-        "--hidden-import=PIL",
-        "--hidden-import=requests_oauthlib",
-        "--hidden-import=google.auth",
-        "--hidden-import=google_auth_oauthlib",
-        "--hidden-import=googleapiclient",
-        "--hidden-import=apscheduler",
-        "--hidden-import=pystray",
-        "--hidden-import=keyring",
-        "--hidden-import=keyring.backends",
+        f"--add-data={PROJECT_ROOT / 'src' / 'assets'}{os.pathsep}src/assets",
+        f"--icon={ico_path}",
+    ]
+    for imp in HIDDEN_IMPORTS:
+        cmd.append(f"--hidden-import={imp}")
+    cmd += [
         "--collect-all=customtkinter",
+        "--collect-all=tkcalendar",
         str(PROJECT_ROOT / "src" / "main.py"),
     ]
+    return cmd
 
-    # Add icon if it exists
-    icon_path = PROJECT_ROOT / "src" / "assets" / "icons" / "app.ico"
-    if icon_path.exists():
-        cmd.insert(-1, f"--icon={icon_path}")
 
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT)
+def build_exe(*, onefile: bool = True) -> Path:
+    """Build with PyInstaller. Returns path to the output."""
+    mode = "single-file" if onefile else "directory"
+    step(f"Building {mode} .exe with PyInstaller")
+
+    cmd = _pyinstaller_cmd(onefile=onefile)
+    print(f"  Mode: {'--onefile' if onefile else '--onedir'}")
+    print(f"  Running PyInstaller...\n")
+
+    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     if result.returncode != 0:
-        print("PyInstaller build failed!")
+        print("\n  ERROR: PyInstaller build failed!")
         sys.exit(1)
 
-    print(f"Executable built in {DIST_DIR}")
+    if onefile:
+        out = DIST_DIR / f"{APP_NAME}.exe"
+    else:
+        out = DIST_DIR / APP_NAME
+
+    if out.exists():
+        if out.is_file():
+            size_mb = out.stat().st_size / (1024 * 1024)
+            print(f"\n  SUCCESS: {out}  ({size_mb:.1f} MB)")
+        else:
+            print(f"\n  SUCCESS: {out}/")
+    else:
+        print(f"\n  WARNING: Expected output not found at {out}")
+
+    return out
 
 
-def create_inno_script():
-    """Generate the Inno Setup script for creating the Windows installer."""
-    iss_content = r"""
-; Inno Setup Script for SmugMug Google Photos Sync
+def create_inno_script() -> Path:
+    """Generate the Inno Setup .iss script."""
+    step("Generating Inno Setup script")
+
+    INSTALLER_DIR.mkdir(parents=True, exist_ok=True)
+    (DIST_DIR / "installer").mkdir(parents=True, exist_ok=True)
+
+    ico_path = ICON_DIR / "app.ico"
+    ico_line = f"SetupIconFile={ico_path}" if ico_path.exists() else ""
+
+    # Detect whether we have a single .exe or a directory build
+    single_exe = DIST_DIR / f"{APP_NAME}.exe"
+    if single_exe.exists():
+        files_section = f'Source: "{single_exe}"; DestDir: "{{app}}"; Flags: ignoreversion'
+    else:
+        app_dir = DIST_DIR / APP_NAME
+        files_section = f'Source: "{app_dir}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs'
+
+    iss_content = f"""; Inno Setup Script for {APP_DISPLAY}
+; Auto-generated by build_installer.py — do not edit manually
+
+#define MyAppName "{APP_DISPLAY}"
+#define MyAppVersion "{VERSION}"
+#define MyAppExeName "{APP_NAME}.exe"
 
 [Setup]
-AppName=SmugMug Google Photos Sync
-AppVersion=1.0.0
-AppPublisher=SmugMug Google Photos Sync
-AppPublisherURL=https://github.com/smugmug-google-photos-sync
-DefaultDirName={autopf}\SmugMugGooglePhotosSync
-DefaultGroupName=SmugMug Google Photos Sync
-UninstallDisplayIcon={app}\SmugMugGooglePhotosSync.exe
-OutputDir=..\dist\installer
-OutputBaseFilename=SmugMugGooglePhotosSync_Setup_1.0.0
-Compression=lzma2
+AppId={{{{{APP_NAME}}}}}
+AppName={{#MyAppName}}
+AppVersion={{#MyAppVersion}}
+AppPublisher={APP_DISPLAY}
+DefaultDirName={{autopf}}\\{APP_NAME}
+DefaultGroupName={{#MyAppName}}
+UninstallDisplayIcon={{app}}\\{{#MyAppExeName}}
+OutputDir={DIST_DIR / "installer"}
+OutputBaseFilename={APP_NAME}_Setup_{VERSION}
+Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-SetupIconFile=..\src\assets\icons\app.ico
 PrivilegesRequired=lowest
+DisableProgramGroupPage=yes
+LicenseFile={PROJECT_ROOT / "LICENSE"}
+{ico_line}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "startupicon"; Description: "Start with Windows"; GroupDescription: "Startup:"
+Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; GroupDescription: "{{cm:AdditionalIcons}}"
+Name: "startupicon"; Description: "Start with Windows"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\SmugMugGooglePhotosSync\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+{files_section}
 
 [Icons]
-Name: "{group}\SmugMug Google Photos Sync"; Filename: "{app}\SmugMugGooglePhotosSync.exe"
-Name: "{group}\Uninstall SmugMug Google Photos Sync"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\SmugMug Google Photos Sync"; Filename: "{app}\SmugMugGooglePhotosSync.exe"; Tasks: desktopicon
-Name: "{userstartup}\SmugMug Google Photos Sync"; Filename: "{app}\SmugMugGooglePhotosSync.exe"; Tasks: startupicon
+Name: "{{group}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"
+Name: "{{group}}\\Uninstall {{#MyAppName}}"; Filename: "{{uninstallexe}}"
+Name: "{{autodesktop}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; Tasks: desktopicon
+Name: "{{userstartup}}\\{{#MyAppName}}"; Filename: "{{app}}\\{{#MyAppExeName}}"; Tasks: startupicon
 
 [Run]
-Filename: "{app}\SmugMugGooglePhotosSync.exe"; Description: "Launch SmugMug Google Photos Sync"; Flags: nowait postinstall skipifsilent
+Filename: "{{app}}\\{{#MyAppExeName}}"; Description: "Launch {{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{localappdata}\SmugMugGooglePhotosSync"
+Type: filesandordirs; Name: "{{localappdata}}\\{APP_NAME}"
 """
+
     iss_path = INSTALLER_DIR / "setup.iss"
-    iss_path.write_text(iss_content.strip())
-    print(f"Inno Setup script written to {iss_path}")
+    iss_path.write_text(iss_content)
+    print(f"  Written: {iss_path}")
     return iss_path
 
 
-def build_installer():
-    """Build the full installer package."""
-    build_executable()
-    iss_path = create_inno_script()
+def compile_inno(iss_path: Path) -> Path | None:
+    """Compile the .iss into a setup .exe using Inno Setup."""
+    step("Compiling with Inno Setup")
 
-    # Try to run Inno Setup if available
-    iscc_paths = [
+    iscc = None
+    for candidate in [
         r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         r"C:\Program Files\Inno Setup 6\ISCC.exe",
-    ]
+    ]:
+        if os.path.exists(candidate):
+            iscc = candidate
+            break
+    if not iscc:
+        iscc = shutil.which("ISCC") or shutil.which("iscc")
 
-    for iscc in iscc_paths:
-        if os.path.exists(iscc):
-            print("Building installer with Inno Setup...")
-            result = subprocess.run([iscc, str(iss_path)], cwd=INSTALLER_DIR)
-            if result.returncode == 0:
-                print("Installer built successfully!")
-                return
-            else:
-                print("Inno Setup build failed")
-                return
+    if not iscc:
+        print("  Inno Setup not found on this system.")
+        print()
+        print("  To create the Windows setup installer:")
+        print("    1. Install Inno Setup 6: https://jrsoftware.org/isinfo.php")
+        print(f"    2. Compile: ISCC.exe \"{iss_path}\"")
+        return None
 
-    print(
-        "Inno Setup not found. To build the installer:\n"
-        "1. Install Inno Setup from https://jrsoftware.org/isinfo.php\n"
-        f"2. Open {iss_path} in Inno Setup Compiler\n"
-        "3. Click Build > Compile"
-    )
+    print(f"  Compiler: {iscc}")
+    result = subprocess.run([iscc, str(iss_path)])
+
+    if result.returncode != 0:
+        print("\n  ERROR: Inno Setup compilation failed!")
+        return None
+
+    output = DIST_DIR / "installer" / f"{APP_NAME}_Setup_{VERSION}.exe"
+    if output.exists():
+        size_mb = output.stat().st_size / (1024 * 1024)
+        print(f"\n  SUCCESS: {output}  ({size_mb:.1f} MB)")
+        return output
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description=f"Build {APP_DISPLAY} installer")
+    parser.add_argument("--exe-only", action="store_true",
+                        help="Only build the PyInstaller executable")
+    parser.add_argument("--inno-only", action="store_true",
+                        help="Only generate and compile Inno Setup (requires exe first)")
+    parser.add_argument("--onedir", action="store_true",
+                        help="Use directory mode instead of single-file (faster startup)")
+    args = parser.parse_args()
+
+    print(f"\n  {APP_DISPLAY} — Build Pipeline v{VERSION}")
+    print(f"  Project root: {PROJECT_ROOT}\n")
+
+    if not args.inno_only:
+        build_exe(onefile=not args.onedir)
+
+    if not args.exe_only:
+        iss_path = create_inno_script()
+        compile_inno(iss_path)
+
+    # Summary
+    step("Build summary")
+    single_exe = DIST_DIR / f"{APP_NAME}.exe"
+    app_dir = DIST_DIR / APP_NAME
+    setup_exe = DIST_DIR / "installer" / f"{APP_NAME}_Setup_{VERSION}.exe"
+
+    if single_exe.exists():
+        print(f"  Portable .exe  : {single_exe}")
+    if app_dir.is_dir():
+        print(f"  App directory  : {app_dir}/")
+    if setup_exe.exists():
+        print(f"  Setup installer: {setup_exe}")
+    print()
 
 
 if __name__ == "__main__":
-    build_installer()
+    main()
