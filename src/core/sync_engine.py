@@ -1,5 +1,6 @@
 """Core sync engine that orchestrates photo transfer from SmugMug to Google Photos."""
 
+import copy
 import logging
 import threading
 import time
@@ -126,9 +127,14 @@ class SyncEngine:
         self._progress_callbacks.remove(callback)
 
     def _notify_progress(self):
+        # Send a snapshot so the UI thread sees a consistent state even if
+        # the background thread mutates _progress before the callback runs.
+        snapshot = copy.copy(self._progress)
+        # Shallow-copy the errors list so appends don't leak across snapshots
+        snapshot.errors = list(self._progress.errors)
         for cb in self._progress_callbacks:
             try:
-                cb(self._progress)
+                cb(snapshot)
             except Exception as e:
                 logger.debug("Progress callback error: %s", e)
 
@@ -174,11 +180,17 @@ class SyncEngine:
         date_from: str = "",
         date_to: str = "",
     ) -> list[SyncTask]:
-        """Build the list of photos to sync based on filters."""
+        """Build the list of photos to sync based on filters.
+
+        Emits PREPARING-state progress callbacks so the UI stays responsive.
+        """
+        self._progress.state = SyncState.PREPARING
+        self._progress.current_filename = "Fetching album list..."
+        self._notify_progress()
+
         tasks = []
 
         if photo_keys:
-            # Sync specific photos - would need to resolve from album context
             logger.info("Building sync tasks for %d specific photos", len(photo_keys))
             return tasks
 
@@ -186,15 +198,25 @@ class SyncEngine:
         all_albums = []
         page = 1
         while True:
+            self._progress.current_filename = f"Fetching albums (page {page})..."
+            self._notify_progress()
             albums, total = self.smugmug.get_albums(page=page, count=50)
             all_albums.extend(albums)
             if len(all_albums) >= total:
                 break
             page += 1
 
-        for album in all_albums:
-            if album_keys and album.key not in album_keys:
-                continue
+        albums_to_scan = [
+            a for a in all_albums if not album_keys or a.key in album_keys
+        ]
+        logger.info("Scanning %d albums for photos to sync", len(albums_to_scan))
+
+        for album_idx, album in enumerate(albums_to_scan):
+            self._progress.current_filename = (
+                f"Scanning album {album_idx + 1}/{len(albums_to_scan)}: {album.name}"
+            )
+            self._progress.current_album = album.name
+            self._notify_progress()
 
             photo_page = 1
             while True:
@@ -224,7 +246,7 @@ class SyncEngine:
                     break
                 photo_page += 1
 
-        logger.info("Built %d sync tasks", len(tasks))
+        logger.info("Built %d sync tasks from %d albums", len(tasks), len(albums_to_scan))
         return tasks
 
     def start_sync(self, tasks: list[SyncTask]):

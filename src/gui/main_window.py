@@ -339,11 +339,13 @@ class MainWindow(ctk.CTk):
                     self.sync_engine.start_sync(tasks)
                 else:
                     self.after(0, lambda: self.dashboard._add_activity(
-                        "No new photos to sync"
+                        "No new photos to sync — everything is up to date"
                     ))
+                    self.after(0, self._reset_sync_ui)
             except Exception as e:
                 logger.error("Sync failed: %s", e)
                 self.after(0, lambda: self.dashboard._add_activity(f"Sync error: {e}"))
+                self.after(0, self._reset_sync_ui)
 
         threading.Thread(target=_build_and_sync, daemon=True).start()
 
@@ -376,9 +378,14 @@ class MainWindow(ctk.CTk):
         self.dashboard._add_activity(f"Starting sync of {len(tasks)} selected photos")
 
     def _on_sync_progress(self, progress: SyncProgress):
-        """Handle sync progress updates (called from background thread)."""
+        """Handle sync progress updates (called from background thread).
+
+        `progress` is already a snapshot (copy) made by the engine, so it is
+        safe to pass directly into the main-thread lambda.
+        """
         try:
-            self.after(0, lambda: self.dashboard.update_progress(progress))
+            # progress is an immutable snapshot — safe to close over
+            self.after(0, lambda p=progress: self.dashboard.update_progress(p))
 
             # Update tray tooltip
             if self.tray.available:
@@ -399,6 +406,18 @@ class MainWindow(ctk.CTk):
                     )
         except Exception as e:
             logger.debug("Progress callback error: %s", e)
+
+    def _reset_sync_ui(self):
+        """Reset dashboard UI back to idle after a sync ends without running."""
+        self.dashboard._progress_bar.set(0)
+        self.dashboard._progress_percent.configure(text="0%")
+        self.dashboard._progress_text.configure(text="No sync in progress")
+        self.dashboard._sync_btn.configure(state="normal")
+        self.dashboard._preview_btn.configure(state="normal")
+        self.dashboard._pause_btn.configure(state="disabled", text="Pause")
+        self.dashboard._cancel_btn.configure(state="disabled")
+        self.dashboard._status_label.configure(text="Ready")
+        self.dashboard._eta_label.configure(text="")
 
     def pause_sync(self):
         if self.sync_engine:

@@ -260,6 +260,22 @@ class DashboardTab(ctk.CTkFrame):
         """Update progress display from SyncProgress object."""
         from src.core.sync_engine import SyncState
 
+        if progress.state == SyncState.PREPARING:
+            # Preparation phase — scanning albums / building task list.
+            # Show an indeterminate-style animation and the current step.
+            self._progress_bar.set(0)
+            self._progress_percent.configure(text="")
+            self._progress_text.configure(
+                text=f"Preparing: {progress.current_filename}"
+            )
+            self._sync_btn.configure(state="disabled")
+            self._preview_btn.configure(state="disabled")
+            self._cancel_btn.configure(state="normal")
+            self._pause_btn.configure(state="disabled")
+            self._status_label.configure(text="Preparing...")
+            self._eta_label.configure(text="Scanning your SmugMug library...")
+            return
+
         pct = progress.percent_complete / 100.0
         self._progress_bar.set(pct)
         self._progress_percent.configure(text=f"{progress.percent_complete:.1f}%")
@@ -269,8 +285,10 @@ class DashboardTab(ctk.CTkFrame):
                 text=f"Syncing: {progress.current_filename} ({progress.current_index}/{progress.total_photos})"
             )
             self._sync_btn.configure(state="disabled")
-            self._pause_btn.configure(state="normal")
+            self._preview_btn.configure(state="disabled")
+            self._pause_btn.configure(state="normal", text="Pause")
             self._cancel_btn.configure(state="normal")
+            self._status_label.configure(text="Syncing...")
 
             eta = progress.estimated_remaining_seconds
             if eta > 0:
@@ -284,11 +302,14 @@ class DashboardTab(ctk.CTkFrame):
             self._pause_btn.configure(text="Resume")
             self._status_label.configure(text="Paused")
         elif progress.state == SyncState.COMPLETED:
+            self._progress_bar.set(1.0)
+            self._progress_percent.configure(text="100%")
             self._progress_text.configure(
                 text=f"Completed: {progress.synced_count} synced, "
                      f"{progress.skipped_count} skipped, {progress.failed_count} failed"
             )
             self._sync_btn.configure(state="normal")
+            self._preview_btn.configure(state="normal")
             self._pause_btn.configure(state="disabled", text="Pause")
             self._cancel_btn.configure(state="disabled")
             self._status_label.configure(text="Sync Complete")
@@ -297,11 +318,23 @@ class DashboardTab(ctk.CTkFrame):
                 f"Sync completed: {progress.synced_count} photos synced"
             )
         elif progress.state == SyncState.ERROR:
-            self._progress_text.configure(text="Error occurred during sync")
+            self._progress_text.configure(
+                text=f"Error: {progress.errors[-1] if progress.errors else 'Unknown error'}"
+            )
             self._sync_btn.configure(state="normal")
+            self._preview_btn.configure(state="normal")
             self._pause_btn.configure(state="disabled")
             self._cancel_btn.configure(state="disabled")
             self._status_label.configure(text="Error")
+            self._eta_label.configure(text="")
+            if progress.errors:
+                self._add_activity(f"Sync error: {progress.errors[-1]}")
+        elif progress.state in (SyncState.IDLE, SyncState.CANCELLING):
+            self._sync_btn.configure(state="normal")
+            self._preview_btn.configure(state="normal")
+            self._pause_btn.configure(state="disabled", text="Pause")
+            self._cancel_btn.configure(state="disabled")
+            self._eta_label.configure(text="")
 
     def _add_activity(self, message: str):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -312,12 +345,16 @@ class DashboardTab(ctk.CTkFrame):
 
     def _on_start_sync(self):
         self._add_activity("Starting sync...")
-        self._status_label.configure(text="Syncing...")
+        self._sync_btn.configure(state="disabled")
+        self._preview_btn.configure(state="disabled")
+        self._status_label.configure(text="Preparing...")
         self.app.start_sync(dry_run=False)
 
     def _on_preview(self):
         self._add_activity("Starting dry run preview...")
-        self._status_label.configure(text="Preview...")
+        self._sync_btn.configure(state="disabled")
+        self._preview_btn.configure(state="disabled")
+        self._status_label.configure(text="Preparing preview...")
         self.app.start_sync(dry_run=True)
 
     def _on_pause(self):
@@ -332,6 +369,8 @@ class DashboardTab(ctk.CTkFrame):
         self.app.cancel_sync()
         self._add_activity("Sync cancelled by user")
         self._sync_btn.configure(state="normal")
+        self._preview_btn.configure(state="normal")
         self._pause_btn.configure(state="disabled", text="Pause")
         self._cancel_btn.configure(state="disabled")
         self._status_label.configure(text="Cancelled")
+        self._eta_label.configure(text="")
