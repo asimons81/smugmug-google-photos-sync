@@ -219,9 +219,15 @@ class SyncEngine:
             self._notify_progress()
 
             photo_page = 1
+            page_size = 100
             while True:
+                self._progress.current_filename = (
+                    f"Scanning album {album_idx + 1}/{len(albums_to_scan)}: "
+                    f"{album.name} (page {photo_page})"
+                )
+                self._notify_progress()
                 photos, total = self.smugmug.get_album_photos(
-                    album.uri, album_name=album.name, page=photo_page
+                    album.uri, album_name=album.name, page=photo_page, count=page_size
                 )
                 for photo in photos:
                     # Apply date filter
@@ -242,7 +248,11 @@ class SyncEngine:
                         target_album_name=album.name if self.preserve_albums else "",
                     ))
 
-                if len(photos) < 100 or photo_page * 100 >= total:
+                if not photos:
+                    break
+                if len(photos) < page_size:
+                    break
+                if total and photo_page * page_size >= total:
                     break
                 photo_page += 1
 
