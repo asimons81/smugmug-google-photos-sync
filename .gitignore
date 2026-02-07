@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.spec
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# App data
+*.db
+*.log
+*.enc
+
+# Credentials - never commit these
+google_credentials.json
+.credentials.enc
+config.json
+
+# Build artifacts
+*.ico
+*.exe
+installer/Output/
