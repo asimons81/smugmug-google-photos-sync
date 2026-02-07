@@ -304,9 +304,10 @@ class MainWindow(ctk.CTk):
         if not self.smugmug or not self.smugmug.is_authenticated:
             self.dashboard._add_activity("Error: SmugMug not authenticated")
             return
-        if not self.google or not self.google.is_authenticated:
-            self.dashboard._add_activity("Error: Google Photos not authenticated")
-            return
+        if not dry_run:
+            if not self.google or not self.google.is_authenticated:
+                self.dashboard._add_activity("Error: Google Photos not authenticated")
+                return
 
         if self.sync_engine and self.sync_engine.is_running:
             self.dashboard._add_activity("Sync already in progress")
@@ -351,7 +352,10 @@ class MainWindow(ctk.CTk):
 
     def start_sync_photos(self, photos: list[SmugMugPhoto]):
         """Start syncing specific selected photos."""
-        if not self.smugmug or not self.google:
+        if not self.smugmug:
+            return
+        dry_run = self.config.get("sync.dry_run", False)
+        if not dry_run and not self.google:
             return
 
         if self.sync_engine and self.sync_engine.is_running:
@@ -363,7 +367,7 @@ class MainWindow(ctk.CTk):
             google=self.google,
             history=self.history,
             bandwidth_limit_mbps=self.config.get("sync.bandwidth_limit_mbps", 0),
-            dry_run=self.config.get("sync.dry_run", False),
+            dry_run=dry_run,
             preserve_metadata=self.config.get("sync.preserve_metadata", True),
             preserve_albums=self.config.get("sync.preserve_albums", True),
             duplicate_detection=self.config.get("sync.duplicate_detection", True),
