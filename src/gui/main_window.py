@@ -69,13 +69,19 @@ class MainWindow(ctk.CTk):
         self._init_clients()
 
         # System tray
+        minimize_to_tray_default = not sys.platform.startswith("linux")
+        self._minimize_to_tray = config.get(
+            "ui.minimize_to_tray", minimize_to_tray_default
+        )
         self.tray = SystemTray(
             on_show=self._show_from_tray,
             on_quit=self._quit_app,
             on_sync=lambda: self.start_sync(dry_run=False),
         )
-        if config.get("ui.minimize_to_tray", True):
+        if self._minimize_to_tray:
             self.tray.start()
+            if not self.tray.available:
+                self._minimize_to_tray = False
 
         # Scheduler
         self.scheduler = SyncScheduler(sync_callback=self._auto_sync)
@@ -310,6 +316,16 @@ class MainWindow(ctk.CTk):
         """Apply settings after they've been saved."""
         self.theme.set_mode(self.config.get("theme", "system"))
         self._init_clients()
+        minimize_to_tray_default = not sys.platform.startswith("linux")
+        self._minimize_to_tray = self.config.get(
+            "ui.minimize_to_tray", minimize_to_tray_default
+        )
+        if self._minimize_to_tray:
+            self.tray.start()
+        else:
+            self.tray.stop()
+        if not self.tray.available:
+            self._minimize_to_tray = False
 
         # Update scheduler
         if self.config.get("sync.auto_sync_enabled", False):
@@ -486,7 +502,7 @@ class MainWindow(ctk.CTk):
 
     def _on_close(self):
         """Handle window close - minimize to tray or quit."""
-        if self.config.get("ui.minimize_to_tray", True) and self.tray.available:
+        if self._minimize_to_tray and self.tray.available:
             self.withdraw()
         else:
             self._quit_app()

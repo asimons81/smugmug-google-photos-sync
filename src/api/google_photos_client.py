@@ -157,6 +157,38 @@ class GooglePhotosClient:
         url = f"{GOOGLE_PHOTOS_API_BASE}/{endpoint}"
         session = self._get_session()
 
+        def _normalize_payload(payload: Any) -> dict[str, Any]:
+            if payload is None:
+                return {}
+            if isinstance(payload, dict):
+                return payload
+            if isinstance(payload, str):
+                preview = payload[:200]
+                logger.debug("Google Photos response payload type=str preview=%r", preview)
+                try:
+                    parsed = json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "Google Photos API response was not a JSON object "
+                        f"(type=str preview={preview!r})"
+                    ) from exc
+                if isinstance(parsed, dict):
+                    return parsed
+                raise ValueError(
+                    "Google Photos API response JSON was not an object "
+                    f"(type={type(parsed).__name__} preview={preview!r})"
+                )
+            preview = str(payload)[:200]
+            logger.debug(
+                "Google Photos response payload type=%s preview=%r",
+                type(payload).__name__,
+                preview,
+            )
+            raise ValueError(
+                "Google Photos API response was not a JSON object "
+                f"(type={type(payload).__name__} preview={preview!r})"
+            )
+
         for attempt in range(3):
             try:
                 resp = session.request(method, url, json=json_data, params=params, timeout=30)
@@ -166,7 +198,8 @@ class GooglePhotosClient:
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
-                return resp.json() if resp.content else {}
+                payload = resp.json() if resp.content else {}
+                return _normalize_payload(payload)
             except requests.exceptions.RequestException as e:
                 if attempt < 2:
                     time.sleep(2 ** attempt)
