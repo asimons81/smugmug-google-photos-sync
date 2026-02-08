@@ -29,7 +29,10 @@
    - Name: SmugMug Google Photos Sync
 5. Configure the OAuth consent screen:
    - User type: External (or Internal for Workspace)
-   - Add scopes: `photoslibrary` and `photoslibrary.sharing`
+   - Add scopes:
+     - `https://www.googleapis.com/auth/photoslibrary.appendonly`
+     - `https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata`
+     - (Only if needed) `https://www.googleapis.com/auth/photoslibrary.edit.appcreateddata`
    - Add your Google account as a test user
 6. Download or copy:
    - **Client ID**

@@ -20,8 +20,9 @@ logger = logging.getLogger(__name__)
 GOOGLE_PHOTOS_API_BASE = "https://photoslibrary.googleapis.com/v1"
 SCOPES = [
     "https://www.googleapis.com/auth/photoslibrary.appendonly",
-    "https://www.googleapis.com/auth/photoslibrary.appcreateddata",
+    "https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata",
 ]
+SCOPES_CACHE_VERSION = 2
 
 
 class GooglePhotosApiError(RuntimeError):
@@ -75,6 +76,7 @@ class GooglePhotosClient:
         self._credentials: Credentials | None = None
         self._credentials_path = credentials_path
         self._session: requests.Session | None = None
+        self._force_consent = False
 
         if credentials_path and credentials_path.exists():
             self._load_credentials()
@@ -87,6 +89,9 @@ class GooglePhotosClient:
         """Load saved credentials from disk."""
         try:
             if self._credentials_path and self._credentials_path.exists():
+                if not self._is_scope_cache_valid():
+                    self._invalidate_cached_credentials("OAuth scopes changed")
+                    return
                 self._credentials = Credentials.from_authorized_user_file(
                     str(self._credentials_path), SCOPES
                 )
@@ -104,6 +109,59 @@ class GooglePhotosClient:
             self._credentials_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._credentials_path, "w") as f:
                 f.write(self._credentials.to_json())
+            self._save_scope_cache()
+
+    def _scope_cache_path(self) -> Path | None:
+        if not self._credentials_path:
+            return None
+        return self._credentials_path.with_suffix(".scopes.json")
+
+    def _load_scope_cache(self) -> dict[str, Any]:
+        cache_path = self._scope_cache_path()
+        if not cache_path or not cache_path.exists():
+            return {}
+        try:
+            return json.loads(cache_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_scope_cache(self):
+        cache_path = self._scope_cache_path()
+        if not cache_path:
+            return
+        payload = {
+            "version": SCOPES_CACHE_VERSION,
+            "scopes": SCOPES,
+        }
+        cache_path.write_text(json.dumps(payload, indent=2))
+
+    def _is_scope_cache_valid(self) -> bool:
+        cache = self._load_scope_cache()
+        cached_scopes = cache.get("scopes")
+        cached_version = cache.get("version")
+        if cached_scopes is None or cached_version is None:
+            self._force_consent = True
+            return False
+        if cached_version != SCOPES_CACHE_VERSION or cached_scopes != SCOPES:
+            self._force_consent = True
+            return False
+        return True
+
+    def _invalidate_cached_credentials(self, reason: str):
+        logger.info("Invalidating cached Google Photos credentials: %s", reason)
+        if self._credentials_path and self._credentials_path.exists():
+            try:
+                self._credentials_path.unlink()
+            except OSError as exc:
+                logger.warning("Failed to remove credentials file: %s", exc)
+        cache_path = self._scope_cache_path()
+        if cache_path and cache_path.exists():
+            try:
+                cache_path.unlink()
+            except OSError as exc:
+                logger.warning("Failed to remove scope cache file: %s", exc)
+        self._credentials = None
+        self._session = None
 
     def _get_session(self) -> requests.Session:
         """Get an authenticated requests session."""
@@ -169,11 +227,12 @@ class GooglePhotosClient:
             flow = self.get_auth_flow(redirect_uri=redirect_uri)
             self._credentials = flow.run_local_server(
                 port=port,
-                prompt="consent",
+                prompt="consent" if self._force_consent else None,
                 open_browser=True,
                 host=host,
                 bind_addr="0.0.0.0",
             )
+            self._force_consent = False
             self._save_credentials()
             self._session = None
             logger.info("Google Photos authentication completed via local server")
