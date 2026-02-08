@@ -1,8 +1,9 @@
 """System tray icon with notifications and context menu."""
 
 import logging
+import os
 import threading
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 
 from PIL import Image, ImageDraw
 
@@ -33,35 +34,61 @@ class SystemTray:
         self._icon = None
         self._thread: threading.Thread | None = None
         self._running = False
+        self._disabled = os.environ.get("DISABLE_TRAY", "").strip() == "1"
+        self._failed = False
+        self._tray_error_logged = False
 
     @property
     def available(self) -> bool:
-        return HAS_PYSTRAY
+        return HAS_PYSTRAY and not self._disabled and not self._failed
+
+    def _log_tray_unavailable(self, reason: str | None = None) -> None:
+        if not self._tray_error_logged:
+            message = "Tray unavailable, continuing without tray"
+            if reason:
+                message = f"{message} ({reason})"
+            logger.warning(message)
+            self._tray_error_logged = True
 
     def start(self):
         """Start the system tray icon in a background thread."""
-        if not HAS_PYSTRAY:
+        if not self.available:
             return
 
-        icon_image = self._create_icon()
-        menu = pystray.Menu(
-            item("Show Window", self._show_window, default=True),
-            item("Start Sync", self._start_sync),
-            pystray.Menu.SEPARATOR,
-            item("Quit", self._quit_app),
-        )
+        try:
+            icon_image = self._create_icon()
+            menu = pystray.Menu(
+                item("Show Window", self._show_window, default=True),
+                item("Start Sync", self._start_sync),
+                pystray.Menu.SEPARATOR,
+                item("Quit", self._quit_app),
+            )
 
-        self._icon = pystray.Icon(
-            "SmugMug Sync",
-            icon_image,
-            "SmugMug Google Photos Sync",
-            menu,
-        )
+            self._icon = pystray.Icon(
+                "SmugMug Sync",
+                icon_image,
+                "SmugMug Google Photos Sync",
+                menu,
+            )
+        except Exception as exc:
+            self._failed = True
+            self._log_tray_unavailable(str(exc))
+            return
 
         self._running = True
-        self._thread = threading.Thread(target=self._icon.run, daemon=True)
+        self._thread = threading.Thread(target=self._run_icon, daemon=True)
         self._thread.start()
         logger.info("System tray icon started")
+
+    def _run_icon(self):
+        try:
+            if self._icon:
+                self._icon.run()
+        except Exception as exc:
+            self._failed = True
+            self._log_tray_unavailable(str(exc))
+        finally:
+            self._running = False
 
     def stop(self):
         """Stop the system tray icon."""
@@ -75,16 +102,21 @@ class SystemTray:
 
     def notify(self, title: str, message: str):
         """Show a desktop notification."""
-        if self._icon and HAS_PYSTRAY:
+        if self._icon and self.available:
             try:
                 self._icon.notify(message, title)
             except Exception as e:
-                logger.debug("Notification failed: %s", e)
+                self._failed = True
+                self._log_tray_unavailable(str(e))
 
     def update_tooltip(self, text: str):
         """Update the tray icon tooltip."""
-        if self._icon:
-            self._icon.title = text
+        if self._icon and self.available:
+            try:
+                self._icon.title = text
+            except Exception as e:
+                self._failed = True
+                self._log_tray_unavailable(str(e))
 
     def _create_icon(self) -> Image.Image:
         """Create the tray icon image."""

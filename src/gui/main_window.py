@@ -1,11 +1,12 @@
 """Main application window - the central hub of the GUI."""
 
 import logging
+import queue
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import customtkinter as ctk
 
@@ -59,6 +60,11 @@ class MainWindow(ctk.CTk):
         # Build UI
         self._build_ui()
 
+        # Thread-safe UI queue for worker updates
+        self._ui_queue: queue.Queue[tuple[Callable, tuple, dict]] = queue.Queue()
+        self._ui_poll_after_id: str | None = None
+        self._refresh_after_id: str | None = None
+
         # Initialize API clients
         self._init_clients()
 
@@ -81,7 +87,31 @@ class MainWindow(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Refresh dashboard stats
-        self.after(500, self._refresh_dashboard)
+        self._refresh_after_id = self.after(500, self._refresh_dashboard)
+        self._schedule_ui_queue_poll()
+
+    def _schedule_ui_queue_poll(self):
+        if not self.winfo_exists():
+            return
+        self._ui_poll_after_id = self.after(100, self._process_ui_queue)
+
+    def enqueue_ui(self, func: Callable, *args, **kwargs) -> None:
+        """Queue a callable to run on the main UI thread."""
+        self._ui_queue.put((func, args, kwargs))
+
+    def _process_ui_queue(self):
+        if not self.winfo_exists():
+            return
+        while True:
+            try:
+                func, args, kwargs = self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                func(*args, **kwargs)
+            except Exception as e:
+                logger.debug("UI callback failed: %s", e)
+        self._schedule_ui_queue_poll()
 
     def _set_app_icon(self):
         """Set the application window icon."""
@@ -291,6 +321,8 @@ class MainWindow(ctk.CTk):
 
     def _refresh_dashboard(self):
         """Refresh dashboard statistics."""
+        if not self.winfo_exists():
+            return
         try:
             stats = self.history.get_stats()
             self.dashboard.update_stats(stats)
@@ -332,20 +364,21 @@ class MainWindow(ctk.CTk):
                     date_to=self.config.get("filters.date_to", ""),
                 )
                 if tasks:
-                    self.after(0, lambda: self.dashboard._add_activity(
+                    self.enqueue_ui(self.dashboard._add_activity,
                         f"Found {len(tasks)} photos to sync"
                         f"{' (dry run)' if dry_run else ''}"
-                    ))
+                    )
                     self.sync_engine.start_sync(tasks)
                 else:
-                    self.after(0, lambda: self.dashboard._add_activity(
-                        "No new photos to sync — everything is up to date"
-                    ))
-                    self.after(0, self._reset_sync_ui)
+                    self.enqueue_ui(
+                        self.dashboard._add_activity,
+                        "No new photos to sync — everything is up to date",
+                    )
+                    self.enqueue_ui(self._reset_sync_ui)
             except Exception as e:
-                logger.error("Sync failed: %s", e)
-                self.after(0, lambda: self.dashboard._add_activity(f"Sync error: {e}"))
-                self.after(0, self._reset_sync_ui)
+                logger.error("Sync failed: %s", e, exc_info=True)
+                self.enqueue_ui(self.dashboard._add_activity, f"Sync error: {e}")
+                self.enqueue_ui(self._reset_sync_ui)
 
         threading.Thread(target=_build_and_sync, daemon=True).start()
 
@@ -385,25 +418,32 @@ class MainWindow(ctk.CTk):
         """
         try:
             # progress is an immutable snapshot — safe to close over
-            self.after(0, lambda p=progress: self.dashboard.update_progress(p))
+            self.enqueue_ui(self.dashboard.update_progress, progress)
 
             # Update tray tooltip
             if self.tray.available:
-                self.tray.update_tooltip(
+                self.enqueue_ui(
+                    self.tray.update_tooltip,
                     f"Syncing: {progress.percent_complete:.0f}% "
-                    f"({progress.current_index}/{progress.total_photos})"
+                    f"({progress.current_index}/{progress.total_photos})",
                 )
 
             # Send notification on completion
             if progress.state == SyncState.COMPLETED:
-                self.after(0, self._refresh_dashboard)
+                self.enqueue_ui(self._refresh_dashboard)
                 if self.config.get("ui.show_notifications", True):
-                    self.tray.notify(
+                    self.enqueue_ui(
+                        self.tray.notify,
                         "Sync Complete",
                         f"Synced {progress.synced_count} photos, "
                         f"{progress.skipped_count} skipped, "
                         f"{progress.failed_count} failed",
                     )
+            elif progress.state == SyncState.ERROR and progress.errors:
+                self.enqueue_ui(
+                    self.dashboard._add_activity,
+                    f"Sync error: {progress.errors[-1]}",
+                )
         except Exception as e:
             logger.debug("Progress callback error: %s", e)
 
@@ -434,7 +474,7 @@ class MainWindow(ctk.CTk):
     def _auto_sync(self):
         """Called by the scheduler for automatic sync."""
         logger.info("Starting automatic scheduled sync")
-        self.after(0, lambda: self.start_sync(dry_run=False))
+        self.enqueue_ui(self.start_sync, dry_run=False)
 
     # --- Window Management ---
 
@@ -462,8 +502,41 @@ class MainWindow(ctk.CTk):
         if self.scheduler:
             self.scheduler.stop()
 
+        self._cancel_scheduled_callbacks()
         self.tray.stop()
         self.history.close()
 
         self.destroy()
         sys.exit(0)
+
+    def _cancel_scheduled_callbacks(self):
+        if self._refresh_after_id:
+            try:
+                self.after_cancel(self._refresh_after_id)
+            except Exception:
+                pass
+            self._refresh_after_id = None
+        if self._ui_poll_after_id:
+            try:
+                self.after_cancel(self._ui_poll_after_id)
+            except Exception:
+                pass
+            self._ui_poll_after_id = None
+        for attr in (
+            "_check_dpi_scaling_after_id",
+            "_check_dpi_scaling_id",
+            "_update_loop_id",
+            "_after_id",
+        ):
+            after_id = getattr(self, attr, None)
+            if after_id:
+                try:
+                    self.after_cancel(after_id)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        if hasattr(self, "settings_tab"):
+            try:
+                self.settings_tab.cancel_after_callbacks()
+            except Exception:
+                pass

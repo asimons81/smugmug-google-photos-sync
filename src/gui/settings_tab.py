@@ -20,6 +20,7 @@ class SettingsTab(ctk.CTkFrame):
     def __init__(self, parent, app: "MainWindow"):
         super().__init__(parent, fg_color="transparent")
         self.app = app
+        self._clear_status_after_id: str | None = None
         self._build_ui()
         self._load_settings()
 
@@ -362,7 +363,22 @@ class SettingsTab(ctk.CTkFrame):
         self.app.apply_settings()
 
         self._save_status.configure(text="Settings saved!")
-        self.after(3000, lambda: self._save_status.configure(text=""))
+        if self._clear_status_after_id:
+            try:
+                self.after_cancel(self._clear_status_after_id)
+            except Exception:
+                pass
+        self._clear_status_after_id = self.after(
+            3000, lambda: self._save_status.configure(text="")
+        )
+
+    def cancel_after_callbacks(self):
+        if self._clear_status_after_id:
+            try:
+                self.after_cancel(self._clear_status_after_id)
+            except Exception:
+                pass
+            self._clear_status_after_id = None
 
     def _on_theme_change(self, value: str):
         self.app.theme.set_mode(value)
@@ -385,16 +401,16 @@ class SettingsTab(ctk.CTkFrame):
                 auth_url, req_token, req_secret = client.get_auth_url()
 
                 webbrowser.open(auth_url)
-                self.after(0, lambda: self._show_verifier_dialog(
-                    client, req_token, req_secret
-                ))
+                self.app.enqueue_ui(self._show_verifier_dialog, client, req_token, req_secret)
             except Exception as e:
                 logger.error("SmugMug auth error: %s", e)
-                self.after(0, lambda: self._sm_status.configure(
-                    text=f"Auth failed: {e}", text_color="#ef4444"
-                ))
+                self.app.enqueue_ui(
+                    self._sm_status.configure,
+                    text=f"Auth failed: {e}",
+                    text_color="#ef4444",
+                )
             finally:
-                self.after(0, lambda: self._sm_auth_btn.configure(state="normal"))
+                self.app.enqueue_ui(self._sm_auth_btn.configure, state="normal")
 
         threading.Thread(target=_auth, daemon=True).start()
 
@@ -423,16 +439,23 @@ class SettingsTab(ctk.CTkFrame):
                 self.app.cred_store.store("smugmug_token_secret", token_secret)
 
                 self.app.init_smugmug_client()
-                self.after(0, lambda: self._sm_status.configure(
-                    text="Authenticated successfully!", text_color="#10b981"
-                ))
-                self.after(0, lambda: self.app.dashboard.update_connection_status(
-                    "smugmug", True, "Connected"
-                ))
+                self.app.enqueue_ui(
+                    self._sm_status.configure,
+                    text="Authenticated successfully!",
+                    text_color="#10b981",
+                )
+                self.app.enqueue_ui(
+                    self.app.dashboard.update_connection_status,
+                    "smugmug",
+                    True,
+                    "Connected",
+                )
             except Exception as e:
-                self.after(0, lambda: self._sm_status.configure(
-                    text=f"Auth failed: {e}", text_color="#ef4444"
-                ))
+                self.app.enqueue_ui(
+                    self._sm_status.configure,
+                    text=f"Auth failed: {e}",
+                    text_color="#ef4444",
+                )
 
         threading.Thread(target=_complete, daemon=True).start()
 
@@ -444,19 +467,25 @@ class SettingsTab(ctk.CTkFrame):
         def _test():
             try:
                 if self.app.smugmug and self.app.smugmug.test_connection():
-                    self.after(0, lambda: self._sm_status.configure(
-                        text="Connection successful!", text_color="#10b981"
-                    ))
+                    self.app.enqueue_ui(
+                        self._sm_status.configure,
+                        text="Connection successful!",
+                        text_color="#10b981",
+                    )
                 else:
-                    self.after(0, lambda: self._sm_status.configure(
-                        text="Connection failed", text_color="#ef4444"
-                    ))
+                    self.app.enqueue_ui(
+                        self._sm_status.configure,
+                        text="Connection failed",
+                        text_color="#ef4444",
+                    )
             except Exception as e:
-                self.after(0, lambda: self._sm_status.configure(
-                    text=f"Test failed: {e}", text_color="#ef4444"
-                ))
+                self.app.enqueue_ui(
+                    self._sm_status.configure,
+                    text=f"Test failed: {e}",
+                    text_color="#ef4444",
+                )
             finally:
-                self.after(0, lambda: self._sm_test_btn.configure(state="normal"))
+                self.app.enqueue_ui(self._sm_test_btn.configure, state="normal")
 
         threading.Thread(target=_test, daemon=True).start()
 
@@ -486,23 +515,32 @@ class SettingsTab(ctk.CTkFrame):
                     cfg.save()
 
                     self.app.google = client
-                    self.after(0, lambda: self._gp_status.configure(
-                        text="Authenticated successfully!", text_color="#10b981"
-                    ))
-                    self.after(0, lambda: self.app.dashboard.update_connection_status(
-                        "google", True, "Connected"
-                    ))
+                    self.app.enqueue_ui(
+                        self._gp_status.configure,
+                        text="Authenticated successfully!",
+                        text_color="#10b981",
+                    )
+                    self.app.enqueue_ui(
+                        self.app.dashboard.update_connection_status,
+                        "google",
+                        True,
+                        "Connected",
+                    )
                 else:
-                    self.after(0, lambda: self._gp_status.configure(
-                        text="Authentication failed", text_color="#ef4444"
-                    ))
+                    self.app.enqueue_ui(
+                        self._gp_status.configure,
+                        text="Authentication failed",
+                        text_color="#ef4444",
+                    )
             except Exception as e:
                 logger.error("Google auth error: %s", e)
-                self.after(0, lambda: self._gp_status.configure(
-                    text=f"Auth failed: {e}", text_color="#ef4444"
-                ))
+                self.app.enqueue_ui(
+                    self._gp_status.configure,
+                    text=f"Auth failed: {e}",
+                    text_color="#ef4444",
+                )
             finally:
-                self.after(0, lambda: self._gp_auth_btn.configure(state="normal"))
+                self.app.enqueue_ui(self._gp_auth_btn.configure, state="normal")
 
         threading.Thread(target=_auth, daemon=True).start()
 
@@ -514,18 +552,24 @@ class SettingsTab(ctk.CTkFrame):
         def _test():
             try:
                 if self.app.google and self.app.google.test_connection():
-                    self.after(0, lambda: self._gp_status.configure(
-                        text="Connection successful!", text_color="#10b981"
-                    ))
+                    self.app.enqueue_ui(
+                        self._gp_status.configure,
+                        text="Connection successful!",
+                        text_color="#10b981",
+                    )
                 else:
-                    self.after(0, lambda: self._gp_status.configure(
-                        text="Connection failed", text_color="#ef4444"
-                    ))
+                    self.app.enqueue_ui(
+                        self._gp_status.configure,
+                        text="Connection failed",
+                        text_color="#ef4444",
+                    )
             except Exception as e:
-                self.after(0, lambda: self._gp_status.configure(
-                    text=f"Test failed: {e}", text_color="#ef4444"
-                ))
+                self.app.enqueue_ui(
+                    self._gp_status.configure,
+                    text=f"Test failed: {e}",
+                    text_color="#ef4444",
+                )
             finally:
-                self.after(0, lambda: self._gp_test_btn.configure(state="normal"))
+                self.app.enqueue_ui(self._gp_test_btn.configure, state="normal")
 
         threading.Thread(target=_test, daemon=True).start()

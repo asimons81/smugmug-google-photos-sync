@@ -266,14 +266,15 @@ class BrowserTab(ctk.CTkFrame):
                         break
                     page += 1
                 self._albums = albums
-                self.after(0, self._populate_albums)
+                self.app.enqueue_ui(self._populate_albums)
             except Exception as e:
                 logger.error("Failed to load albums: %s", e)
-                self.after(0, lambda: self._status_text.configure(
-                    text=f"Failed to load albums: {e}"
-                ))
+                self.app.enqueue_ui(
+                    self._status_text.configure,
+                    text=f"Failed to load albums: {e}",
+                )
             finally:
-                self.after(0, lambda: self._refresh_btn.configure(state="normal"))
+                self.app.enqueue_ui(self._refresh_btn.configure, state="normal")
 
         threading.Thread(target=_load, daemon=True).start()
 
@@ -345,12 +346,13 @@ class BrowserTab(ctk.CTkFrame):
                     count=50,
                 )
                 self._photos.extend(photos)
-                self.after(0, lambda: self._display_photos(photos, total))
+                self.app.enqueue_ui(self._display_photos, photos, total)
             except Exception as e:
                 logger.error("Failed to load photos: %s", e)
-                self.after(0, lambda: self._status_text.configure(
-                    text=f"Failed to load photos: {e}"
-                ))
+                self.app.enqueue_ui(
+                    self._status_text.configure,
+                    text=f"Failed to load photos: {e}",
+                )
             finally:
                 self._loading = False
 
@@ -398,7 +400,7 @@ class BrowserTab(ctk.CTkFrame):
                     import requests
                     resp = requests.get(photo.thumbnail_url, timeout=15)
                     resp.raise_for_status()
-                    self.after(0, lambda data=resp.content: thumb_widget.set_thumbnail(data))
+                    self.app.enqueue_ui(thumb_widget.set_thumbnail, resp.content)
             except Exception as e:
                 logger.debug("Thumbnail download failed for %s: %s", photo.filename, e)
 
