@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: caption-this-api
+    runtime: docker
+    dockerfilePath: deploy/Dockerfile
+    region: ohio
+    plan: starter
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: CORS_ORIGINS
+        value: https://captions.tonyreviewsthings.com
+      - key: WHISPER_DEVICE
+        value: cpu
+      - key: WHISPER_COMPUTE_TYPE
+        value: int8
+    disk:
+      name: caption-data
+      mountPath: /data
+      sizeGB: 10
