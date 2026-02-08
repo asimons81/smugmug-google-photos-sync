@@ -101,9 +101,19 @@ class SmugMugClient:
 
     def get_auth_url(self, callback_url: str = "oob") -> tuple[str, str, str]:
         """Start OAuth flow: returns (auth_url, request_token, request_token_secret)."""
-        oauth = OAuth1Session(self.api_key, client_secret=self.api_secret,
-                              callback_uri=callback_url)
-        fetch_response = oauth.fetch_request_token(SMUGMUG_REQUEST_TOKEN_URL)
+        oauth = OAuth1Session(
+            self.api_key,
+            client_secret=self.api_secret,
+            callback_uri=callback_url,
+        )
+        oauth.headers.update({
+            "Accept": "application/json",
+            "User-Agent": "SmugMugGooglePhotosSync/1.0",
+        })
+        fetch_response = oauth.fetch_request_token(
+            SMUGMUG_REQUEST_TOKEN_URL,
+            params={"Access": "Full", "Permissions": "Read"},
+        )
         request_token = fetch_response["oauth_token"]
         request_token_secret = fetch_response["oauth_token_secret"]
 
@@ -126,6 +136,10 @@ class SmugMugClient:
             resource_owner_secret=request_token_secret,
             verifier=verifier,
         )
+        oauth.headers.update({
+            "Accept": "application/json",
+            "User-Agent": "SmugMugGooglePhotosSync/1.0",
+        })
         tokens = oauth.fetch_access_token(SMUGMUG_ACCESS_TOKEN_URL)
         self.access_token = tokens["oauth_token"]
         self.token_secret = tokens["oauth_token_secret"]
