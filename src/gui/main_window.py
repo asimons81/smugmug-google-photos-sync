@@ -526,6 +526,17 @@ class MainWindow(ctk.CTk):
         sys.exit(0)
 
     def _cancel_scheduled_callbacks(self):
+        try:
+            after_ids = self.tk.call("after", "info")
+        except Exception:
+            after_ids = []
+        if isinstance(after_ids, str):
+            after_ids = after_ids.split()
+        for after_id in after_ids:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
         if self._refresh_after_id:
             try:
                 self.after_cancel(self._refresh_after_id)

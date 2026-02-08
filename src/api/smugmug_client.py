@@ -220,6 +220,43 @@ class SmugMugClient:
 
         return {}
 
+    def _extract_image_size_details(self, payload: Any) -> dict[str, Any]:
+        if not payload:
+            return {}
+        if isinstance(payload, dict):
+            if "ImageSizeDetails" in payload:
+                details = payload.get("ImageSizeDetails")
+                if isinstance(details, dict):
+                    return details
+                if isinstance(details, list) and details:
+                    if isinstance(details[0], dict):
+                        return details[0]
+                    return {}
+            return payload
+        return {}
+
+    def _fetch_image_size_details(self, uri: str) -> dict[str, Any]:
+        if not uri:
+            return {}
+        try:
+            if uri.startswith("http"):
+                session = self._get_session()
+                resp = session.get(uri, timeout=30)
+                resp.raise_for_status()
+                payload = resp.json() if resp.content else {}
+                data = self._normalize_payload(payload)
+                response = data.get("Response", data)
+                if isinstance(response, str):
+                    response = json.loads(response)
+                if not isinstance(response, dict):
+                    return {}
+            else:
+                response = self._api_get(uri)
+            return self._extract_image_size_details(response)
+        except Exception as exc:
+            logger.warning("Failed to fetch ImageSizeDetails from %r: %s", uri, exc)
+            return {}
+
     def get_authenticated_user(self) -> dict[str, Any]:
         """Get the authenticated user's information."""
         data = self._api_get(f"{SMUGMUG_API_VERSION}!authuser")
@@ -266,18 +303,40 @@ class SmugMugClient:
 
         photos = []
         for item in data.get("AlbumImage", []):
-            sizes = item.get("Uris", {}).get("ImageSizeDetails", {}).get("ImageSizeDetails", {})
-            thumbnail_url = ""
-            original_url = ""
-            if sizes:
-                thumbnail_url = sizes.get("ThumbImageUrl", sizes.get("SmallImageUrl", ""))
-                original_url = sizes.get("OriginalImageUrl", sizes.get("LargestImageUrl", ""))
-            else:
-                thumbnail_url = item.get("ThumbnailUrl", "")
-                original_url = item.get("ArchivedUri", "")
+            image_key = item.get("ImageKey", "")
+            album_key = item.get("AlbumKey", "") or album_uri
+            sizes = {}
+            size_details = item.get("Uris", {}).get("ImageSizeDetails")
+            if isinstance(size_details, dict):
+                sizes = self._extract_image_size_details(size_details)
+            elif isinstance(size_details, str):
+                preview = size_details[:120]
+                logger.info(
+                    "ImageSizeDetails URI encountered (album=%s image=%s preview=%r)",
+                    album_key,
+                    image_key,
+                    preview,
+                )
+                sizes = self._fetch_image_size_details(size_details)
+            elif size_details is None:
+                sizes = {}
+
+            thumbnail_url = (
+                sizes.get("ThumbImageUrl")
+                or sizes.get("SmallImageUrl")
+                or sizes.get("TinyImageUrl")
+                or item.get("ThumbnailUrl", "")
+            )
+            original_url = (
+                sizes.get("OriginalImageUrl")
+                or sizes.get("LargestImageUrl")
+                or item.get("OriginalUrl", "")
+                or item.get("ArchivedUri", "")
+                or item.get("WebUri", "")
+            )
 
             photos.append(SmugMugPhoto(
-                key=item.get("ImageKey", ""),
+                key=image_key,
                 uri=item.get("Uri", ""),
                 title=item.get("Title", ""),
                 filename=item.get("FileName", ""),
