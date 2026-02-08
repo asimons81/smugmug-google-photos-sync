@@ -9,7 +9,11 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable
 
-from src.api.google_photos_client import GooglePhotosClient
+from src.api.google_photos_client import (
+    GooglePhotosApiError,
+    GooglePhotosClient,
+    GooglePhotosPermissionError,
+)
 from src.api.smugmug_client import SmugMugClient, SmugMugPhoto
 from src.core.sync_history import SyncHistory
 
@@ -110,6 +114,7 @@ class SyncEngine:
         self._sync_thread: threading.Thread | None = None
         self._progress_callbacks: list[Callable[[SyncProgress], None]] = []
         self._album_cache: dict[str, str] = {}  # album_name -> google_album_id
+        self._album_listing_blocked = False
 
     @property
     def progress(self) -> SyncProgress:
@@ -156,16 +161,33 @@ class SyncEngine:
         if album_name in self._album_cache:
             return self._album_cache[album_name]
 
-        # Search existing albums
-        page_token = ""
-        while True:
-            albums, page_token = self.google.get_albums(page_token)
-            for album in albums:
-                self._album_cache[album.title] = album.id
-                if album.title == album_name:
-                    return album.id
-            if not page_token:
-                break
+        if not self._album_listing_blocked:
+            # Search existing app-created albums
+            page_token = ""
+            try:
+                while True:
+                    albums, page_token = self.google.get_albums(page_token)
+                    for album in albums:
+                        self._album_cache[album.title] = album.id
+                        if album.title == album_name:
+                            return album.id
+                    if not page_token:
+                        break
+            except GooglePhotosPermissionError as e:
+                self._album_listing_blocked = True
+                message = (
+                    "Google Photos album listing is restricted. "
+                    "Create or select an app-created album, then retry."
+                )
+                logger.warning("%s (status=%s)", message, e.status_code)
+                self._progress.errors.append(message)
+                self._notify_progress()
+            except GooglePhotosApiError as e:
+                logger.warning("Google Photos album lookup failed: %s", e)
+                self._progress.errors.append(
+                    "Google Photos album lookup failed. Reconnect Google Photos and retry."
+                )
+                self._notify_progress()
 
         # Create if not found
         new_album = self.google.create_album(album_name)

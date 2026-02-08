@@ -1,5 +1,6 @@
 """Google Photos API client with OAuth 2.0 authentication."""
 
+import os
 import hashlib
 import io
 import json
@@ -18,9 +19,24 @@ logger = logging.getLogger(__name__)
 
 GOOGLE_PHOTOS_API_BASE = "https://photoslibrary.googleapis.com/v1"
 SCOPES = [
-    "https://www.googleapis.com/auth/photoslibrary",
-    "https://www.googleapis.com/auth/photoslibrary.sharing",
+    "https://www.googleapis.com/auth/photoslibrary.appendonly",
+    "https://www.googleapis.com/auth/photoslibrary.appcreateddata",
 ]
+
+
+class GooglePhotosApiError(RuntimeError):
+    """Base error for Google Photos API failures."""
+
+    def __init__(self, message: str, status_code: int | None = None,
+                 response_text: str = "", endpoint: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_text = response_text
+        self.endpoint = endpoint
+
+
+class GooglePhotosPermissionError(GooglePhotosApiError):
+    """Permission-related Google Photos API error."""
 
 
 @dataclass
@@ -136,9 +152,27 @@ class GooglePhotosClient:
     def authenticate_local_server(self, port: int = 8090) -> bool:
         """Authenticate using a local server redirect (opens browser)."""
         try:
-            flow = self.get_auth_flow(redirect_uri=f"http://localhost:{port}/")
+            host = os.environ.get("OAUTH_CALLBACK_HOST")
+            if not host and self._is_chromeos():
+                host = "penguin.linux.test"
+            if not host:
+                host = "localhost"
+
+            redirect_uri = f"http://{host}:{port}/"
+            fallback_url = f"http://penguin.linux.test:{port}/"
+            if host != "penguin.linux.test":
+                logger.info(
+                    "If the callback fails on ChromeOS, try this URL: %s",
+                    fallback_url,
+                )
+
+            flow = self.get_auth_flow(redirect_uri=redirect_uri)
             self._credentials = flow.run_local_server(
-                port=port, prompt="consent", open_browser=True
+                port=port,
+                prompt="consent",
+                open_browser=True,
+                host=host,
+                bind_addr="0.0.0.0",
             )
             self._save_credentials()
             self._session = None
@@ -146,6 +180,14 @@ class GooglePhotosClient:
             return True
         except Exception as e:
             logger.error("Google Photos local server auth failed: %s", e)
+        return False
+
+    def _is_chromeos(self) -> bool:
+        try:
+            with open("/etc/os-release", "r") as handle:
+                content = handle.read().lower()
+            return "cros" in content or "chromeos" in content
+        except Exception:
             return False
 
     # --- API Methods ---
@@ -197,10 +239,39 @@ class GooglePhotosClient:
                     logger.warning("Google Photos rate limited, waiting %ds", wait)
                     time.sleep(wait)
                     continue
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    response_text = resp.text.strip()
+                    logger.error(
+                        "Google Photos API request failed (%s %s): status=%s body=%s",
+                        method,
+                        endpoint,
+                        resp.status_code,
+                        response_text,
+                    )
+                    if resp.status_code == 403:
+                        raise GooglePhotosPermissionError(
+                            "Google Photos API permission error",
+                            status_code=resp.status_code,
+                            response_text=response_text,
+                            endpoint=endpoint,
+                        )
+                    raise GooglePhotosApiError(
+                        "Google Photos API request failed",
+                        status_code=resp.status_code,
+                        response_text=response_text,
+                        endpoint=endpoint,
+                    )
                 payload = resp.json() if resp.content else {}
                 return _normalize_payload(payload)
             except requests.exceptions.RequestException as e:
+                if e.response is not None:
+                    logger.error(
+                        "Google Photos API request failed (%s %s): status=%s body=%s",
+                        method,
+                        endpoint,
+                        e.response.status_code,
+                        e.response.text.strip(),
+                    )
                 if attempt < 2:
                     time.sleep(2 ** attempt)
                     continue
@@ -298,7 +369,15 @@ class GooglePhotosClient:
             resp.raise_for_status()
             upload_token = resp.text
         except requests.exceptions.RequestException as e:
-            logger.error("Failed to upload bytes for %s: %s", filename, e)
+            if hasattr(e, "response") and e.response is not None:
+                logger.error(
+                    "Failed to upload bytes for %s: status=%s body=%s",
+                    filename,
+                    e.response.status_code,
+                    e.response.text.strip(),
+                )
+            else:
+                logger.error("Failed to upload bytes for %s: %s", filename, e)
             return None
 
         # Step 2: Create media item from the upload token
@@ -363,6 +442,18 @@ class GooglePhotosClient:
         try:
             albums, _ = self.get_albums()
             return True
+        except GooglePhotosPermissionError as e:
+            message = (
+                "Google Photos album listing is restricted. "
+                "Reconnect Google Photos or create an app-created album."
+            )
+            logger.error("Google Photos connection test failed: %s", message)
+            raise GooglePhotosPermissionError(
+                message,
+                status_code=e.status_code,
+                response_text=e.response_text,
+                endpoint=e.endpoint,
+            ) from e
         except Exception as e:
             logger.error("Google Photos connection test failed: %s", e)
-            return False
+            raise
