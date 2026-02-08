@@ -9,6 +9,11 @@ from PIL import Image, ImageDraw
 
 logger = logging.getLogger(__name__)
 
+
+def _is_truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 # pystray is optional - only available on desktop platforms
 try:
     import pystray
@@ -34,7 +39,7 @@ class SystemTray:
         self._icon = None
         self._thread: threading.Thread | None = None
         self._running = False
-        self._disabled = os.environ.get("DISABLE_TRAY", "").strip() == "1"
+        self._disabled = _is_truthy(os.environ.get("DISABLE_TRAY", ""))
         self._failed = False
         self._tray_error_logged = False
 
@@ -50,9 +55,13 @@ class SystemTray:
             logger.warning(message)
             self._tray_error_logged = True
 
+    def _handle_tray_exception(self, exc: Exception) -> None:
+        self._failed = True
+        self._log_tray_unavailable(str(exc))
+
     def start(self):
         """Start the system tray icon in a background thread."""
-        if not self.available:
+        if not self.available or self._running or self._icon:
             return
 
         try:
@@ -71,8 +80,7 @@ class SystemTray:
                 menu,
             )
         except Exception as exc:
-            self._failed = True
-            self._log_tray_unavailable(str(exc))
+            self._handle_tray_exception(exc)
             return
 
         self._running = True
@@ -85,8 +93,7 @@ class SystemTray:
             if self._icon:
                 self._icon.run()
         except Exception as exc:
-            self._failed = True
-            self._log_tray_unavailable(str(exc))
+            self._handle_tray_exception(exc)
         finally:
             self._running = False
 
@@ -96,8 +103,8 @@ class SystemTray:
         if self._icon:
             try:
                 self._icon.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._handle_tray_exception(exc)
         self._icon = None
 
     def notify(self, title: str, message: str):
@@ -105,18 +112,16 @@ class SystemTray:
         if self._icon and self.available:
             try:
                 self._icon.notify(message, title)
-            except Exception as e:
-                self._failed = True
-                self._log_tray_unavailable(str(e))
+            except Exception as exc:
+                self._handle_tray_exception(exc)
 
     def update_tooltip(self, text: str):
         """Update the tray icon tooltip."""
         if self._icon and self.available:
             try:
                 self._icon.title = text
-            except Exception as e:
-                self._failed = True
-                self._log_tray_unavailable(str(e))
+            except Exception as exc:
+                self._handle_tray_exception(exc)
 
     def _create_icon(self) -> Image.Image:
         """Create the tray icon image."""
