@@ -364,20 +364,19 @@ class SettingsTab(ctk.CTkFrame):
 
         self._save_status.configure(text="Settings saved!")
         if self._clear_status_after_id:
-            try:
-                self.after_cancel(self._clear_status_after_id)
-            except Exception:
-                pass
-        self._clear_status_after_id = self.after(
-            3000, lambda: self._save_status.configure(text="")
+            self.app.cancel_after_job(self._clear_status_after_id)
+        self._clear_status_after_id = self.app.schedule_after(
+            3000, self._clear_save_status
         )
+
+    def _clear_save_status(self) -> None:
+        if not self.winfo_exists():
+            return
+        self._save_status.configure(text="")
 
     def cancel_after_callbacks(self):
         if self._clear_status_after_id:
-            try:
-                self.after_cancel(self._clear_status_after_id)
-            except Exception:
-                pass
+            self.app.cancel_after_job(self._clear_status_after_id)
             self._clear_status_after_id = None
 
     def _on_theme_change(self, value: str):
