@@ -1,6 +1,7 @@
 """SmugMug API client with OAuth 1.0a authentication."""
 
 import hashlib
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -134,6 +135,39 @@ class SmugMugClient:
 
     # --- API Methods ---
 
+    @staticmethod
+    def _normalize_payload(payload: Any) -> dict[str, Any]:
+        if payload is None:
+            return {}
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            preview = payload[:200]
+            logger.debug("SmugMug API response payload type=str preview=%r", preview)
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "SmugMug API response was not a JSON object "
+                    f"(type=str preview={preview!r})"
+                ) from exc
+            if isinstance(parsed, dict):
+                return parsed
+            raise ValueError(
+                "SmugMug API response JSON was not an object "
+                f"(type={type(parsed).__name__} preview={preview!r})"
+            )
+        preview = str(payload)[:200]
+        logger.debug(
+            "SmugMug API response payload type=%s preview=%r",
+            type(payload).__name__,
+            preview,
+        )
+        raise ValueError(
+            "SmugMug API response was not a JSON object "
+            f"(type={type(payload).__name__} preview={preview!r})"
+        )
+
     def _api_get(self, endpoint: str, params: dict | None = None) -> dict[str, Any]:
         """Make an authenticated GET request to the SmugMug API."""
         url = f"{SMUGMUG_API_BASE}{endpoint}"
@@ -153,7 +187,30 @@ class SmugMugClient:
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
-                return resp.json().get("Response", {})
+                payload = resp.json() if resp.content else {}
+                data = self._normalize_payload(payload)
+                response = data.get("Response", {})
+                if isinstance(response, str):
+                    logger.debug(
+                        "SmugMug API Response field type=str preview=%r",
+                        response[:200],
+                    )
+                    try:
+                        response = json.loads(response)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            "SmugMug API Response field was not a JSON object "
+                            f"(preview={response[:200]!r})"
+                        ) from exc
+                if response is None:
+                    return {}
+                if not isinstance(response, dict):
+                    preview = str(response)[:200]
+                    raise ValueError(
+                        "SmugMug API Response field was not an object "
+                        f"(type={type(response).__name__} preview={preview!r})"
+                    )
+                return response
             except requests.exceptions.RequestException as e:
                 if attempt < 2:
                     time.sleep(2 ** attempt)

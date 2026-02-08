@@ -38,27 +38,27 @@ def main():
         splash = SplashScreen()
 
         splash.set_progress(0.1, "Loading configuration...")
-        splash_root.after(100, splash_root.update)
+        splash_root.update()
         time.sleep(0.3)
 
         splash.set_progress(0.3, "Initializing API clients...")
-        splash_root.after(100, splash_root.update)
+        splash_root.update()
         time.sleep(0.3)
 
         splash.set_progress(0.5, "Setting up database...")
-        splash_root.after(100, splash_root.update)
+        splash_root.update()
         time.sleep(0.3)
 
         splash.set_progress(0.7, "Building interface...")
-        splash_root.after(100, splash_root.update)
+        splash_root.update()
         time.sleep(0.3)
 
         splash.set_progress(0.9, "Almost ready...")
-        splash_root.after(100, splash_root.update)
+        splash_root.update()
         time.sleep(0.2)
 
         splash.set_progress(1.0, "Launching!")
-        splash_root.after(100, splash_root.update)
+        splash_root.update()
         time.sleep(0.2)
 
         splash.close()
