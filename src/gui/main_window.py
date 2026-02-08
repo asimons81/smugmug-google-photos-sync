@@ -64,6 +64,7 @@ class MainWindow(ctk.CTk):
         self._ui_queue: queue.Queue[tuple[Callable, tuple, dict]] = queue.Queue()
         self._ui_poll_after_id: str | None = None
         self._refresh_after_id: str | None = None
+        self._last_progress_error: str | None = None
 
         # Initialize API clients
         self._init_clients()
@@ -460,6 +461,11 @@ class MainWindow(ctk.CTk):
                     self.dashboard._add_activity,
                     f"Sync error: {progress.errors[-1]}",
                 )
+            if progress.errors and progress.state != SyncState.ERROR:
+                latest_error = progress.errors[-1]
+                if latest_error != self._last_progress_error:
+                    self._last_progress_error = latest_error
+                    self.enqueue_ui(self.dashboard._add_activity, latest_error)
         except Exception as e:
             logger.debug("Progress callback error: %s", e)
 
@@ -526,6 +532,15 @@ class MainWindow(ctk.CTk):
         sys.exit(0)
 
     def _cancel_scheduled_callbacks(self):
+        try:
+            after_ids = self.tk.call("after", "info")
+        except Exception:
+            after_ids = []
+        for after_id in after_ids:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
         if self._refresh_after_id:
             try:
                 self.after_cancel(self._refresh_after_id)
