@@ -62,6 +62,7 @@ class MainWindow(ctk.CTk):
 
         # Thread-safe UI queue for worker updates
         self._ui_queue: queue.Queue[tuple[Callable, tuple, dict]] = queue.Queue()
+        self._after_jobs: set[str] = set()
         self._ui_poll_after_id: str | None = None
         self._refresh_after_id: str | None = None
         self._last_progress_error: str | None = None
@@ -94,13 +95,39 @@ class MainWindow(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Refresh dashboard stats
-        self._refresh_after_id = self.after(500, self._refresh_dashboard)
+        self._refresh_after_id = self.schedule_after(500, self._refresh_dashboard)
         self._schedule_ui_queue_poll()
+
+    def schedule_after(self, delay_ms: int, callback: Callable[[], Any]) -> str | None:
+        """Schedule a callback and keep a registry for safe cancellation."""
+        if not self.winfo_exists():
+            return None
+        after_id: str | None = None
+
+        def _wrapped() -> None:
+            if after_id:
+                self._after_jobs.discard(after_id)
+            if not self.winfo_exists():
+                return
+            callback()
+
+        after_id = self.after(delay_ms, _wrapped)
+        self._after_jobs.add(after_id)
+        return after_id
+
+    def cancel_after_job(self, after_id: str | None) -> None:
+        if not after_id:
+            return
+        try:
+            self.after_cancel(after_id)
+        except Exception:
+            pass
+        self._after_jobs.discard(after_id)
 
     def _schedule_ui_queue_poll(self):
         if not self.winfo_exists():
             return
-        self._ui_poll_after_id = self.after(100, self._process_ui_queue)
+        self._ui_poll_after_id = self.schedule_after(100, self._process_ui_queue)
 
     def enqueue_ui(self, func: Callable, *args, **kwargs) -> None:
         """Queue a callable to run on the main UI thread."""
@@ -532,27 +559,11 @@ class MainWindow(ctk.CTk):
         sys.exit(0)
 
     def _cancel_scheduled_callbacks(self):
-        try:
-            after_ids = self.tk.call("after", "info")
-        except Exception:
-            after_ids = []
-        for after_id in after_ids:
-            try:
-                self.after_cancel(after_id)
-            except Exception:
-                pass
-        if self._refresh_after_id:
-            try:
-                self.after_cancel(self._refresh_after_id)
-            except Exception:
-                pass
-            self._refresh_after_id = None
-        if self._ui_poll_after_id:
-            try:
-                self.after_cancel(self._ui_poll_after_id)
-            except Exception:
-                pass
-            self._ui_poll_after_id = None
+        for after_id in list(self._after_jobs):
+            self.cancel_after_job(after_id)
+        self._after_jobs.clear()
+        self._refresh_after_id = None
+        self._ui_poll_after_id = None
         for attr in (
             "_check_dpi_scaling_after_id",
             "_check_dpi_scaling_id",
@@ -561,10 +572,7 @@ class MainWindow(ctk.CTk):
         ):
             after_id = getattr(self, attr, None)
             if after_id:
-                try:
-                    self.after_cancel(after_id)
-                except Exception:
-                    pass
+                self.cancel_after_job(after_id)
                 setattr(self, attr, None)
         if hasattr(self, "settings_tab"):
             try:
