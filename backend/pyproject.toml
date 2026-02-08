@@ -1,0 +1,19 @@
+[project]
+name = "caption-this-backend"
+version = "0.1.0"
+description = "Caption This — free local-first video captioning API"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "faster-whisper>=1.1.0",
+    "python-multipart>=0.0.18",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+]
