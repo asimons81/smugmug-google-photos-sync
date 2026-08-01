@@ -89,7 +89,7 @@ class SyncEngine:
     def __init__(
         self,
         smugmug: SmugMugClient,
-        google: GooglePhotosClient,
+        google: GooglePhotosClient | None,
         history: SyncHistory,
         bandwidth_limit_mbps: float = 0,
         dry_run: bool = False,
@@ -158,6 +158,8 @@ class SyncEngine:
 
     def _get_or_create_album(self, album_name: str) -> str:
         """Get or create a Google Photos album. Returns album ID."""
+        if self.google is None:
+            raise RuntimeError("Google Photos client is not configured")
         if album_name in self._album_cache:
             return self._album_cache[album_name]
 
@@ -379,6 +381,9 @@ class SyncEngine:
                 error_message="dry run",
             )
             return
+
+        if self.google is None:
+            raise RuntimeError("Google Photos client is not configured")
 
         # Download from SmugMug
         def download_progress(downloaded, total):
